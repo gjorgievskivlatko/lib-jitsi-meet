@@ -135,6 +135,11 @@ function _getCodecMimeType(codec) {
  *       and so on...
  */
 export default function JitsiConference(options) {
+    if (browser.isFirefox()) {
+        const errmsg = 'browser.firefoxNotAllowed';
+        logger.error(errmsg);
+        throw new Error(errmsg);
+    }
     if (!options.name || options.name.toLowerCase() !== options.name.toString()) {
         const errmsg
             = 'Invalid conference name (no conference name passed or it '
@@ -578,6 +583,25 @@ JitsiConference.prototype._init = function(options = {}) {
     if (config && config.transcriptionLanguage && config.transcriptionLanguage !== 'en-US') {
         this.setLocalParticipantProperty('transcription_language', config.transcriptionLanguage);
     }
+
+    const self = this;
+    const p2pCheckInterval = setInterval(function () {
+        if (!self.isP2PActive()) {
+            if (self._shouldBeInP2PMode()) {
+                console.info('p2p should be active - activating');
+                self._maybeStartOrStopP2P();
+            } else {
+                console.info('p2p should NOT be active - idle');
+            }
+        } else {
+            if (self._shouldBeInP2PMode()) {
+                console.info('p2p should be active - idle');
+            } else {
+                console.info('p2p should NOT be active - deactivating');
+                self._maybeStartOrStopP2P();
+            }
+        }
+    }, 15 * 1000);
 };
 
 /**
@@ -2162,9 +2186,7 @@ JitsiConference.prototype._onIncomingCallP2P = function(jingleSession, jingleOff
             reasonDescription: 'P2P disabled',
             errorMsg: 'P2P across two endpoints in different SDP modes is disabled'
         };
-    } else if ((!this.isP2PEnabled() && !this.isP2PTestModeEnabled())
-        || browser.isFirefox()
-        || browser.isWebKitBased()) {
+    } else if ((!this.isP2PEnabled() && !this.isP2PTestModeEnabled())) {
         rejectReason = {
             reason: 'decline',
             reasonDescription: 'P2P disabled',
@@ -2197,6 +2219,17 @@ JitsiConference.prototype._onIncomingCallP2P = function(jingleSession, jingleOff
  * Handles an incoming call event.
  */
 JitsiConference.prototype.onIncomingCall = function(jingleSession, jingleOffer, now) {
+    if (browser.isFirefox()) {
+        const description = 'Rejecting firefox p2p call.';
+        this._rejectIncomingCall(
+            jingleSession, {
+                reason: 'security-error',
+                reasonDescription: description,
+                errorMsg: description
+            });
+        return;
+    }
+
     // Handle incoming P2P call
     if (jingleSession.isP2P) {
         this._onIncomingCallP2P(jingleSession, jingleOffer);
@@ -2212,8 +2245,16 @@ JitsiConference.prototype.onIncomingCall = function(jingleSession, jingleOffer, 
                 });
 
             return;
+        } else {
+            const description = 'Rejecting non p2p call.';
+            this._rejectIncomingCall(
+                jingleSession, {
+                    reason: 'security-error',
+                    reasonDescription: description,
+                    errorMsg: description
+                });
+            return;
         }
-        this._acceptJvbIncomingCall(jingleSession, jingleOffer, now);
     }
 };
 
@@ -3441,8 +3482,6 @@ JitsiConference.prototype._suspendMediaTransferForJvbConnection = function() {
 JitsiConference.prototype._maybeStartOrStopP2P = function(userLeftEvent) {
     if (!this.isP2PEnabled()
             || this.isP2PTestModeEnabled()
-            || browser.isFirefox()
-            || browser.isWebKitBased()
             || this.isE2EEEnabled()) {
         logger.info('Auto P2P disabled');
 
